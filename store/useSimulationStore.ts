@@ -78,6 +78,7 @@ interface SimulationStore {
   stopCGMTimer: () => void;
   advanceToNextReading: () => Promise<void>;
   clearError: () => void;
+  resetSimulationWithStableData: () => Promise<void>;
 }
 
 // Helper functions for AsyncStorage persistence
@@ -463,5 +464,70 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
   // Clear error state
   clearError: () => {
     set({ error: null });
+  },
+
+  resetSimulationWithStableData: async () => {
+    const { currentPatient } = get();
+    if (!currentPatient) {
+      console.log('No current patient for reset');
+      return;
+    }
+
+    try {
+      console.log('Resetting simulation with stable 100 mg/dL data...');
+
+      // Stop current CGM timer
+      const { cgmTimer } = get();
+      if (cgmTimer) {
+        clearInterval(cgmTimer);
+      }
+
+      // Clear all existing glucose data
+      await database.clearGlucoseData(currentPatient.id);
+
+      // Generate stable glucose data at 100 mg/dL for the past hour (12 readings)
+      const stableReadings: GlucoseReading[] = [];
+      const now = new Date();
+      const alignedNow = alignToFiveMinutes(now);
+
+      for (let i = 11; i >= 0; i--) { // 12 readings (past hour)
+        const timestamp = new Date(alignedNow.getTime() - (i * 5 * 60 * 1000));
+        stableReadings.push({
+          id: `stable_${timestamp.getTime()}`,
+          timestamp,
+          value: 100.0, // Stable 100 mg/dL
+          iob: 0,
+          cob: 0,
+          isFuture: false,
+          patientId: currentPatient.id,
+        });
+      }
+
+      // Insert the stable readings into the database
+      for (const reading of stableReadings) {
+        await database.insertGlucoseReading(reading);
+      }
+
+      console.log(`Generated ${stableReadings.length} stable readings at 100 mg/dL`);
+
+      // Reload the glucose data
+      await get().loadGlucoseData(24, 2);
+
+      // Reset simulation state
+      set({
+        simulationState: {
+          isRunning: false,
+          isComputing: false,
+          currentGlucose: 100.0,
+        },
+        nextReadingTime: null,
+        cgmTimer: null,
+      });
+
+      console.log('Simulation reset complete');
+    } catch (error) {
+      console.error('Failed to reset simulation:', error);
+      set({ error: 'Failed to reset simulation' });
+    }
   },
 }));

@@ -307,6 +307,37 @@ class Database {
     return nextReading ? new Date(nextReading.timestamp) : null;
   }
 
+  // Insert a single glucose reading
+  async insertGlucoseReading(reading: GlucoseReading): Promise<void> {
+    if (!this.db) throw new Error('Database not initialized');
+
+    await this.db.runAsync(
+      `INSERT OR REPLACE INTO glucose_readings
+       (id, timestamp, value, iob, cob, isFuture, patientId)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        reading.id,
+        reading.timestamp.toISOString(),
+        reading.value,
+        reading.iob,
+        reading.cob,
+        reading.isFuture ? 1 : 0,
+        reading.patientId,
+      ]
+    );
+  }
+
+  // Clear all glucose data for a patient
+  async clearGlucoseData(patientId: string): Promise<void> {
+    if (!this.db) throw new Error('Database not initialized');
+
+    await this.db.runAsync(
+      'DELETE FROM glucose_readings WHERE patientId = ?',
+      [patientId]
+    );
+    console.log(`Cleared all glucose data for patient ${patientId}`);
+  }
+
   // Cleanup old data
   async cleanupOldData(patientId: string, before: Date): Promise<void> {
     if (!this.db) throw new Error('Database not initialized');

@@ -11,7 +11,7 @@ import {
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
 import * as ScreenOrientation from 'expo-screen-orientation';
-import { GlucoseChart } from '../../components/GlucoseChart';
+import { GlucoseChart2 } from '../../components/GlucoseChart2';
 import { QuickTreatment } from '../../components/QuickTreatment';
 import { useSimulationStore } from '../../store/useSimulationStore';
 import { glucoseSimulator } from '../../utils/glucoseSimulator';
@@ -36,6 +36,7 @@ export default function GlucoseScreen() {
     startSimulation,
     startCGMTimer,
     clearError,
+    resetSimulationWithStableData,
   } = useSimulationStore();
 
   useEffect(() => {
@@ -231,12 +232,11 @@ export default function GlucoseScreen() {
           />
         }
       >
-        <GlucoseChart
-          readings={glucoseReadings}
-          targetRange={currentPatient.targetGlucose}
-          currentGlucose={currentGlucose}
-          iob={iob}
-          cob={cob}
+        <GlucoseChart2
+          onResetData={() => {
+            console.log('Reset data requested');
+            // For now, just a placeholder - we can implement data reset later
+          }}
         />
 
         <QuickTreatment
