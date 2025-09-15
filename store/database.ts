@@ -262,6 +262,51 @@ class Database {
     };
   }
 
+  // Advance next future reading to current
+  async advanceNextReading(patientId: string): Promise<GlucoseReading | null> {
+    if (!this.db) throw new Error('Database not initialized');
+
+    // Get the earliest future reading
+    const nextReading = await this.db.getFirstAsync<any>(
+      `SELECT * FROM glucose_readings
+       WHERE patientId = ? AND isFuture = 1 AND timestamp <= ?
+       ORDER BY timestamp ASC LIMIT 1`,
+      [patientId, new Date().toISOString()]
+    );
+
+    if (!nextReading) return null;
+
+    // Mark it as current (not future)
+    await this.db.runAsync(
+      'UPDATE glucose_readings SET isFuture = 0 WHERE id = ?',
+      [nextReading.id]
+    );
+
+    return {
+      id: nextReading.id,
+      timestamp: new Date(nextReading.timestamp),
+      value: nextReading.value,
+      iob: nextReading.iob,
+      cob: nextReading.cob,
+      isFuture: false,
+      patientId: nextReading.patientId,
+    };
+  }
+
+  // Get next scheduled reading time
+  async getNextReadingTime(patientId: string): Promise<Date | null> {
+    if (!this.db) throw new Error('Database not initialized');
+
+    const nextReading = await this.db.getFirstAsync<any>(
+      `SELECT timestamp FROM glucose_readings
+       WHERE patientId = ? AND isFuture = 1
+       ORDER BY timestamp ASC LIMIT 1`,
+      [patientId]
+    );
+
+    return nextReading ? new Date(nextReading.timestamp) : null;
+  }
+
   // Cleanup old data
   async cleanupOldData(patientId: string, before: Date): Promise<void> {
     if (!this.db) throw new Error('Database not initialized');

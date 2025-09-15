@@ -27,11 +27,13 @@ export default function GlucoseScreen() {
     simulationState,
     isLoading,
     error,
+    nextReadingTime,
     initializeStore,
     createPatient,
     addTreatment,
     loadGlucoseData,
     startSimulation,
+    startCGMTimer,
     clearError,
   } = useSimulationStore();
 
@@ -60,8 +62,8 @@ export default function GlucoseScreen() {
     try {
       // Recompute simulation
       await startSimulation();
-      // Reload glucose data
-      await loadGlucoseData(3, 3);
+      // Reload glucose data (only historical)
+      await loadGlucoseData(3, 0);
     } catch (error) {
       console.error('Failed to refresh:', error);
     }
@@ -92,11 +94,14 @@ export default function GlucoseScreen() {
       
       // Start initial simulation
       await startSimulation();
-      await loadGlucoseData(3, 3);
+      await loadGlucoseData(3, 0); // Only show historical data
+
+      // Start CGM timer for real-time updates
+      await startCGMTimer();
     } catch (error) {
       Alert.alert('Error', 'Failed to create patient profile. Please try again.');
     }
-  }, [createPatient, startSimulation, loadGlucoseData]);
+  }, [createPatient, startSimulation, loadGlucoseData, startCGMTimer]);
 
   // Show initialization loading state
   if (isInitializing) {
@@ -233,6 +238,11 @@ export default function GlucoseScreen() {
           <Text style={styles.statusText}>
             Last updated: {simulationState.lastComputedAt.toLocaleTimeString()}
           </Text>
+          {nextReadingTime && (
+            <Text style={styles.statusText}>
+              Next reading: {nextReadingTime.toLocaleTimeString()}
+            </Text>
+          )}
           {simulationState.computedUntil > new Date() && (
             <Text style={styles.statusText}>
               Predicted until: {simulationState.computedUntil.toLocaleTimeString()}

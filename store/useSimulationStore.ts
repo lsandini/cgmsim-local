@@ -21,6 +21,8 @@ interface SimulationStore {
   simulationState: SimulationState;
   isLoading: boolean;
   error: string | null;
+  nextReadingTime: Date | null;
+  cgmTimer: NodeJS.Timeout | null;
 
   // Actions
   initializeStore: () => Promise<void>;
@@ -33,6 +35,9 @@ interface SimulationStore {
   startSimulation: () => Promise<void>;
   updateSimulationState: (state: Partial<SimulationState>) => void;
   setCurrentGlucose: (value: number) => Promise<void>;
+  startCGMTimer: () => Promise<void>;
+  stopCGMTimer: () => void;
+  advanceToNextReading: () => Promise<void>;
   clearError: () => void;
 }
 
@@ -75,6 +80,8 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
   },
   isLoading: false,
   error: null,
+  nextReadingTime: null,
+  cgmTimer: null,
 
   // Initialize store and database
   initializeStore: async () => {
@@ -161,8 +168,11 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
       
       // Load recent data
       await get().loadTreatments(20);
-      await get().loadGlucoseData(3, 3);
-      
+      await get().loadGlucoseData(3, 0); // Only show historical data
+
+      // Start CGM timer for real-time updates
+      await get().startCGMTimer();
+
       set({ isLoading: false });
     } catch (error) {
       set({ 
@@ -235,20 +245,25 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
     }
   },
 
-  // Load glucose data for chart
-  loadGlucoseData: async (hoursBack, hoursForward) => {
+  // Load glucose data for chart (only historical readings)
+  loadGlucoseData: async (hoursBack, hoursForward = 0) => {
     try {
       const { currentPatientId } = get();
       if (!currentPatientId) return;
 
       const now = new Date();
       const from = new Date(now.getTime() - hoursBack * 60 * 60 * 1000);
+      // Only show historical data up to now, not future predictions
       const to = new Date(now.getTime() + hoursForward * 60 * 60 * 1000);
 
-      const readings = await database.getGlucoseReadings(currentPatientId, from, to);
-      set({ glucoseReadings: readings });
+      const allReadings = await database.getGlucoseReadings(currentPatientId, from, to);
+
+      // Filter to show only historical readings (not future predictions)
+      const historicalReadings = allReadings.filter(reading => !reading.isFuture);
+
+      set({ glucoseReadings: historicalReadings });
     } catch (error) {
-      set({ 
+      set({
         error: error instanceof Error ? error.message : 'Failed to load glucose data'
       });
     }
@@ -327,6 +342,83 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
       set({ 
         error: error instanceof Error ? error.message : 'Failed to update glucose'
       });
+    }
+  },
+
+  // Start CGM timer for real-time readings
+  startCGMTimer: async () => {
+    const { currentPatientId, cgmTimer } = get();
+    if (!currentPatientId) return;
+
+    // Clear existing timer
+    if (cgmTimer) {
+      clearInterval(cgmTimer);
+    }
+
+    console.log('Starting CGM timer...');
+
+    // Get next reading time
+    const nextTime = await database.getNextReadingTime(currentPatientId);
+    if (nextTime) {
+      set({ nextReadingTime: nextTime });
+      console.log('Next reading scheduled for:', nextTime.toLocaleTimeString());
+    }
+
+    // Set up interval to check every 30 seconds
+    const timer = setInterval(async () => {
+      await get().advanceToNextReading();
+    }, 30000); // Check every 30 seconds
+
+    set({ cgmTimer: timer });
+  },
+
+  // Stop CGM timer
+  stopCGMTimer: () => {
+    const { cgmTimer } = get();
+    if (cgmTimer) {
+      clearInterval(cgmTimer);
+      set({ cgmTimer: null, nextReadingTime: null });
+      console.log('CGM timer stopped');
+    }
+  },
+
+  // Advance to next reading if it's time
+  advanceToNextReading: async () => {
+    try {
+      const { currentPatientId, nextReadingTime } = get();
+      if (!currentPatientId || !nextReadingTime) return;
+
+      const now = new Date();
+      if (now >= nextReadingTime) {
+        console.log('Advancing to next CGM reading...');
+
+        // Advance the reading in database
+        const newReading = await database.advanceNextReading(currentPatientId);
+
+        if (newReading) {
+          console.log(`New CGM reading: ${newReading.value} mg/dL at ${newReading.timestamp.toLocaleTimeString()}`);
+
+          // Update current glucose in patient
+          await get().updatePatient({ currentGlucose: newReading.value });
+
+          // Reload glucose data to update the chart
+          await get().loadGlucoseData(3, 3);
+
+          // Get next reading time
+          const nextTime = await database.getNextReadingTime(currentPatientId);
+          set({ nextReadingTime: nextTime });
+
+          if (nextTime) {
+            console.log('Next reading scheduled for:', nextTime.toLocaleTimeString());
+          } else {
+            console.log('No more future readings available - triggering simulation');
+            // Trigger new simulation to generate more readings
+            await get().startSimulation();
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Failed to advance CGM reading:', error);
     }
   },
 
