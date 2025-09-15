@@ -1,16 +1,55 @@
 import { create } from 'zustand';
-import { MMKV } from 'react-native-mmkv';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Patient, Treatment, GlucoseReading, SimulationState, DEFAULT_PATIENT } from '../types';
 import { database } from './database';
 
-// Initialize storage only on client side
-let storage: MMKV | null = null;
-const getStorage = () => {
-  if (typeof window !== 'undefined' && !storage) {
-    storage = new MMKV();
+// Helper function to align timestamp to nearest 5-minute interval
+const alignToFiveMinutes = (date: Date): Date => {
+  const aligned = new Date(date);
+  const minutes = aligned.getMinutes();
+  const remainder = minutes % 5;
+
+  if (remainder !== 0) {
+    // Round down to nearest 5-minute interval
+    aligned.setMinutes(minutes - remainder);
+    aligned.setSeconds(0);
+    aligned.setMilliseconds(0);
   }
-  return storage;
+
+  return aligned;
 };
+
+// Helper function to generate stable historical glucose data
+const generateHistoricalGlucoseData = (patient: Patient, durationMinutes: number = 30): GlucoseReading[] => {
+  const readings: GlucoseReading[] = [];
+  const now = new Date();
+  const alignedNow = alignToFiveMinutes(now);
+  const intervalMinutes = 5;
+  const totalReadings = Math.floor(durationMinutes / intervalMinutes) + 1; // +1 for starting point
+  const baseGlucose = 108; // mg/dL (6 mmol/L)
+
+  for (let i = 0; i < totalReadings; i++) {
+    // Create timestamps aligned to 5-minute intervals
+    const timestamp = new Date(alignedNow.getTime() - (totalReadings - 1 - i) * intervalMinutes * 60 * 1000);
+
+    // Add minimal random variation (±2 mg/dL) to make it realistic but stable
+    const variation = (Math.random() - 0.5) * 4; // ±2 mg/dL range
+    const glucoseValue = baseGlucose + variation;
+
+    readings.push({
+      id: `historical_${timestamp.getTime()}`,
+      timestamp,
+      value: Math.round(glucoseValue * 10) / 10,
+      iob: 0, // No insulin on board for historical stable data
+      cob: 0, // No carbs on board for historical stable data
+      isFuture: false,
+      patientId: patient.id,
+    });
+  }
+
+  return readings;
+};
+
 
 interface SimulationStore {
   // State
@@ -41,24 +80,18 @@ interface SimulationStore {
   clearError: () => void;
 }
 
-// Helper functions for MMKV persistence
-const persistToMMKV = (key: string, value: any) => {
+// Helper functions for AsyncStorage persistence
+const persistToAsyncStorage = async (key: string, value: any) => {
   try {
-    const storageInstance = getStorage();
-    if (storageInstance) {
-      storageInstance.set(key, JSON.stringify(value));
-    }
+    await AsyncStorage.setItem(key, JSON.stringify(value));
   } catch (error) {
     console.error(`Failed to persist ${key}:`, error);
   }
 };
 
-const loadFromMMKV = <T>(key: string, defaultValue: T): T => {
+const loadFromAsyncStorage = async <T>(key: string, defaultValue: T): Promise<T> => {
   try {
-    const storageInstance = getStorage();
-    if (!storageInstance) return defaultValue;
-
-    const stored = storageInstance.getString(key);
+    const stored = await AsyncStorage.getItem(key);
     return stored ? JSON.parse(stored) : defaultValue;
   } catch (error) {
     console.error(`Failed to load ${key}:`, error);
@@ -69,7 +102,7 @@ const loadFromMMKV = <T>(key: string, defaultValue: T): T => {
 export const useSimulationStore = create<SimulationStore>((set, get) => ({
   // Initial state
   currentPatient: null,
-  currentPatientId: loadFromMMKV('currentPatientId', null),
+  currentPatientId: null,
   glucoseReadings: [],
   recentTreatments: [],
   simulationState: {
@@ -93,7 +126,9 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
       await database.init();
       console.log('Database initialized successfully');
 
-      const currentPatientId = get().currentPatientId;
+      // Load currentPatientId from AsyncStorage
+      const currentPatientId = await loadFromAsyncStorage('currentPatientId', null);
+      set({ currentPatientId });
       console.log('Current patient ID:', currentPatientId);
 
       if (currentPatientId) {
@@ -116,34 +151,39 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
   createPatient: async (patientData) => {
     try {
       set({ isLoading: true, error: null });
-      
+
       const patientId = `patient_${Date.now()}`;
       const now = new Date();
-      
+
       const patient: Patient = {
         ...DEFAULT_PATIENT,
         ...patientData,
         id: patientId,
+        currentGlucose: 108, // Set initial glucose to 108 mg/dL
         createdAt: now,
         updatedAt: now,
       };
 
       await database.savePatient(patient);
-      
+
+      // Generate and save 30 minutes of stable historical glucose data
+      const historicalReadings = generateHistoricalGlucoseData(patient, 30);
+      await database.saveGlucoseReadings(historicalReadings);
+
       // Set as current patient
-      set({ 
+      set({
         currentPatient: patient,
         currentPatientId: patientId,
-        isLoading: false 
+        isLoading: false
       });
-      
-      persistToMMKV('currentPatientId', patientId);
-      
+
+      await persistToAsyncStorage('currentPatientId', patientId);
+
       return patientId;
     } catch (error) {
-      set({ 
+      set({
         error: error instanceof Error ? error.message : 'Failed to create patient',
-        isLoading: false 
+        isLoading: false
       });
       throw error;
     }
@@ -164,11 +204,11 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
         currentPatientId: patientId,
       });
       
-      persistToMMKV('currentPatientId', patientId);
+      await persistToAsyncStorage('currentPatientId', patientId);
       
       // Load recent data
       await get().loadTreatments(20);
-      await get().loadGlucoseData(3, 0); // Only show historical data
+      await get().loadGlucoseData(24, 2); // Load 24 hours historical + 2 hours future
 
       // Start CGM timer for real-time updates
       await get().startCGMTimer();
@@ -245,23 +285,21 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
     }
   },
 
-  // Load glucose data for chart (only historical readings)
-  loadGlucoseData: async (hoursBack, hoursForward = 0) => {
+  // Load glucose data for chart (historical and future predictions)
+  loadGlucoseData: async (hoursBack, hoursForward = 2) => {
     try {
       const { currentPatientId } = get();
       if (!currentPatientId) return;
 
       const now = new Date();
       const from = new Date(now.getTime() - hoursBack * 60 * 60 * 1000);
-      // Only show historical data up to now, not future predictions
+      // Include future predictions up to specified hours forward
       const to = new Date(now.getTime() + hoursForward * 60 * 60 * 1000);
 
       const allReadings = await database.getGlucoseReadings(currentPatientId, from, to);
 
-      // Filter to show only historical readings (not future predictions)
-      const historicalReadings = allReadings.filter(reading => !reading.isFuture);
-
-      set({ glucoseReadings: historicalReadings });
+      // Include both historical and future readings (up to 1 hour of predictions)
+      set({ glucoseReadings: allReadings });
     } catch (error) {
       set({
         error: error instanceof Error ? error.message : 'Failed to load glucose data'
@@ -318,7 +356,7 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
       });
 
       // Reload glucose data to update the chart
-      await get().loadGlucoseData(3, 3);
+      await get().loadGlucoseData(24, 2);
     } catch (error) {
       set({ 
         error: error instanceof Error ? error.message : 'Simulation failed',
@@ -402,7 +440,7 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
           await get().updatePatient({ currentGlucose: newReading.value });
 
           // Reload glucose data to update the chart
-          await get().loadGlucoseData(3, 3);
+          await get().loadGlucoseData(24, 2);
 
           // Get next reading time
           const nextTime = await database.getNextReadingTime(currentPatientId);

@@ -1,12 +1,28 @@
-import { 
-  Patient, 
-  Treatment, 
-  GlucoseReading, 
-  DEFAULT_INSULIN_CURVE, 
+import {
+  Patient,
+  Treatment,
+  GlucoseReading,
+  DEFAULT_INSULIN_CURVE,
   DEFAULT_CARB_CURVE,
   InsulinCurve,
-  CarbAbsorption 
+  CarbAbsorption
 } from '../types';
+
+// Helper function to align timestamp to nearest 5-minute interval
+const alignToFiveMinutes = (date: Date): Date => {
+  const aligned = new Date(date);
+  const minutes = aligned.getMinutes();
+  const remainder = minutes % 5;
+
+  if (remainder !== 0) {
+    // Round down to nearest 5-minute interval
+    aligned.setMinutes(minutes - remainder);
+    aligned.setSeconds(0);
+    aligned.setMilliseconds(0);
+  }
+
+  return aligned;
+};
 
 interface SimulationParams {
   patient: Patient;
@@ -205,13 +221,16 @@ class GlucoseSimulator {
   simulate(params: SimulationParams): GlucoseReading[] {
     const { patient, treatments, startTime, durationHours, intervalMinutes = 5 } = params;
     this.intervalMinutes = intervalMinutes;
-    
+
     const readings: GlucoseReading[] = [];
     const totalIntervals = Math.ceil((durationHours * 60) / intervalMinutes);
     let currentGlucose = patient.currentGlucose;
-    
+
+    // Align start time to 5-minute interval
+    const alignedStartTime = alignToFiveMinutes(startTime);
+
     for (let i = 0; i <= totalIntervals; i++) {
-      const currentTime = new Date(startTime.getTime() + i * intervalMinutes * 60 * 1000);
+      const currentTime = new Date(alignedStartTime.getTime() + i * intervalMinutes * 60 * 1000);
       const timeElapsed = i * intervalMinutes;
       
       if (i > 0) {
@@ -255,22 +274,23 @@ class GlucoseSimulator {
    * Simulate forward from current time
    */
   simulateForward(
-    patient: Patient, 
-    treatments: Treatment[], 
+    patient: Patient,
+    treatments: Treatment[],
     hoursForward: number = 12
   ): GlucoseReading[] {
     const now = new Date();
-    
+    const alignedNow = alignToFiveMinutes(now);
+
     // Include treatments from the last 24 hours that might still be active
     const relevantTreatments = treatments.filter(t => {
       const hoursAgo = (now.getTime() - t.timestamp.getTime()) / (1000 * 60 * 60);
       return hoursAgo <= 24; // Include treatments from last 24 hours
     });
-    
+
     return this.simulate({
       patient,
       treatments: relevantTreatments,
-      startTime: now,
+      startTime: alignedNow,
       durationHours: hoursForward,
       intervalMinutes: this.intervalMinutes,
     });

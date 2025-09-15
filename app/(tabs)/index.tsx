@@ -10,6 +10,7 @@ import {
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
+import * as ScreenOrientation from 'expo-screen-orientation';
 import { GlucoseChart } from '../../components/GlucoseChart';
 import { QuickTreatment } from '../../components/QuickTreatment';
 import { useSimulationStore } from '../../store/useSimulationStore';
@@ -56,14 +57,34 @@ export default function GlucoseScreen() {
     initialize();
   }, [initializeStore]);
 
+  // Enable screen rotation for this screen
+  useEffect(() => {
+    const enableRotation = async () => {
+      try {
+        // Allow all orientations for this screen
+        await ScreenOrientation.unlockAsync();
+      } catch (error) {
+        console.error('Failed to unlock orientation:', error);
+      }
+    };
+
+    enableRotation();
+
+    // Cleanup: you might want to lock orientation when leaving this screen
+    return () => {
+      // Optional: Lock back to portrait when leaving
+      // ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP);
+    };
+  }, []);
+
   const onRefresh = useCallback(async () => {
     if (!currentPatient) return;
     
     try {
       // Recompute simulation
       await startSimulation();
-      // Reload glucose data (only historical)
-      await loadGlucoseData(3, 0);
+      // Reload glucose data (historical + future)
+      await loadGlucoseData(24, 2);
     } catch (error) {
       console.error('Failed to refresh:', error);
     }
@@ -94,7 +115,7 @@ export default function GlucoseScreen() {
       
       // Start initial simulation
       await startSimulation();
-      await loadGlucoseData(3, 0); // Only show historical data
+      await loadGlucoseData(24, 2); // Load 24 hours historical + 2 hours future
 
       // Start CGM timer for real-time updates
       await startCGMTimer();
