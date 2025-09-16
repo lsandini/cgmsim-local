@@ -1,5 +1,5 @@
 import React, { useRef, useEffect, useState } from 'react';
-import { View, Text, StyleSheet, useWindowDimensions, TouchableOpacity } from 'react-native';
+import { View, Text, StyleSheet, useWindowDimensions, TouchableOpacity, ScrollView } from 'react-native';
 import { LineChart } from 'react-native-gifted-charts';
 import { GlucoseReading } from '../types';
 import { format } from 'date-fns';
@@ -22,10 +22,13 @@ export function GlucoseChart({
   onResetSimulation
 }: GlucoseChartProps) {
   const [hoursInViewport, setHoursInViewport] = useState(3); // Default to 3 hours
+  const [forceCenter, setForceCenter] = useState(0); // Trigger for forcing re-center
   const windowDimensions = useWindowDimensions();
   const screenWidth = windowDimensions.width;
   const screenHeight = windowDimensions.height;
   const scrollViewRef = useRef(null);
+  const scrollTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const userScrollRef = useRef({ hasScrolled: false, lastScrollTime: 0 });
 
   // Chart dimensions
   const isLandscape = screenWidth > screenHeight;
@@ -39,18 +42,9 @@ export function GlucoseChart({
     const currentIndex = ranges.indexOf(hoursInViewport);
     const nextIndex = (currentIndex + 1) % ranges.length;
     setHoursInViewport(ranges[nextIndex]);
+    userScrollRef.current.hasScrolled = false; // Reset scroll state when changing zoom
+    setForceCenter(prev => prev + 1); // Trigger re-center
   };
-
-  if (readings.length === 0) {
-    return (
-      <View style={styles.container}>
-        <View style={styles.emptyState}>
-          <Text style={styles.emptyText}>No glucose data available</Text>
-          <Text style={styles.emptySubtext}>Start simulation to see your glucose trend</Text>
-        </View>
-      </View>
-    );
-  }
 
   const now = new Date();
 
@@ -94,7 +88,7 @@ export function GlucoseChart({
           value: actualReading.value,
           isFuture: actualReading.isFuture || false,
           hasData: true,
-          isCurrent: Math.abs(actualReading.timestamp.getTime() - now.getTime()) < (2.5 * 60 * 1000) // Within 2.5 min of now
+          isCurrent: false // We'll mark the most recent reading as current after processing all data
         });
       } else {
         // No data - use baseline for scrolling
@@ -105,6 +99,18 @@ export function GlucoseChart({
           hasData: false,
           isCurrent: false
         });
+      }
+    }
+
+    // Find the most recent non-future reading and mark it as current
+    const nonFutureReadings = timeline.filter(p => p.hasData && !p.isFuture);
+    if (nonFutureReadings.length > 0) {
+      // Sort by timestamp and take the most recent
+      const mostRecent = nonFutureReadings.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime())[0];
+      const mostRecentIndex = timeline.findIndex(p => p === mostRecent);
+      if (mostRecentIndex !== -1) {
+        timeline[mostRecentIndex].isCurrent = true;
+        console.log(`Marked reading at ${format(mostRecent.timestamp, 'HH:mm')} as current (value: ${mostRecent.value})`);
       }
     }
 
@@ -138,7 +144,7 @@ export function GlucoseChart({
   // STEP 1: Create simple chart data for react-native-gifted-charts
   // Convert timeline to gifted-charts format
   const chartData = fullTimeline.map((point, index) => ({
-    value: point.hasData ? point.value : 150, // Show actual data or baseline for scrolling
+    value: point.value, // Always use the point's value (actual data or baseline)
     label: index % 72 === 0 ? format(point.timestamp, 'HH:mm') : '', // Labels every 6h
     dataPointColor: point.isCurrent ? '#ef4444' : point.isFuture ? '#6b7280' : '#000000',
     dataPointRadius: point.isCurrent ? 6 : 4,
@@ -170,38 +176,13 @@ export function GlucoseChart({
   // === STEP 3: CALCULATE CHART DIMENSIONS & VIEWPORT ===
   const baseChartWidth = Math.max(300, screenWidth - 80);
 
-  // Calculate viewport requirements
+  // Calculate viewport requirements - simplified
   const dotsPerHour = 12; // 5-minute intervals
-  let viewportHours: number;
-  let viewportPastHours: number;
-  let viewportFutureHours: number;
+  const viewportDots = hoursInViewport * dotsPerHour; // Show exactly what the button says
+  const dotSpacing = (screenWidth - 40) / Math.max(1, viewportDots - 1);
 
-  switch (hoursInViewport) {
-    case 1:
-      viewportPastHours = 1;
-      viewportFutureHours = 1;
-      viewportHours = 2;
-      break;
-    case 3:
-      viewportPastHours = 3;
-      viewportFutureHours = 2;
-      viewportHours = 5;
-      break;
-    case 6:
-    default:
-      viewportPastHours = 6;
-      viewportFutureHours = 2;
-      viewportHours = 8;
-      break;
-  }
-
-  const viewportDots = viewportHours * dotsPerHour;
-  const dotSpacing = baseChartWidth / Math.max(1, viewportDots - 1);
-
-  // Make chart wide enough for full 24h + 2h = 26h scrolling
-  const totalTimelineHours = 26;
-  const scrollSpacing = 50; // Large spacing for smooth scrolling
-  const fullChartWidth = chartData.length * scrollSpacing; // 50px per point = ~15,600px total
+  // Make chart width based on calculated dot spacing
+  const fullChartWidth = chartData.length * dotSpacing;
 
   console.log(`=== VIEWPORT CALCULATIONS ===`);
   console.log(`Selected: ${hoursInViewport}h viewport = ${viewportDots} dots should fit in screen`);
@@ -218,22 +199,78 @@ export function GlucoseChart({
     console.log(`Current dot spacing: ${dotSpacing.toFixed(1)}px`);
   }, [hoursInViewport, dotSpacing]);
 
+  // Track previous values to detect actual changes
+  const prevHoursInViewport = useRef(hoursInViewport);
+  const prevForceCenter = useRef(forceCenter);
+
   // === AUTO-SCROLL TO CURRENT READING ===
   useEffect(() => {
-    if (hasCurrentReading && scrollViewRef.current) {
-      const scrollToX = Math.max(0, (currentReadingIndex * scrollSpacing) - (screenWidth / 2));
-      console.log(`Auto-scrolling to current reading at index ${currentReadingIndex}, x=${scrollToX}`);
-
-      // Delay scroll to ensure chart is rendered
-      setTimeout(() => {
-        scrollViewRef.current?.scrollTo({
-          x: scrollToX,
-          y: 0,
-          animated: true
-        });
-      }, 100);
+    if (!hasCurrentReading || currentReadingIndex === -1 || !scrollViewRef.current) {
+      return;
     }
-  }, [hasCurrentReading, currentReadingIndex, scrollSpacing, screenWidth]);
+
+    // Detect what actually changed
+    const zoomChanged = prevHoursInViewport.current !== hoursInViewport;
+    const forceCenterChanged = prevForceCenter.current !== forceCenter;
+
+    // Update refs
+    prevHoursInViewport.current = hoursInViewport;
+    prevForceCenter.current = forceCenter;
+
+    // Only proceed if zoom or forceCenter actually changed
+    if (!zoomChanged && !forceCenterChanged) {
+      console.log('Skipping auto-scroll - no actual trigger');
+      return;
+    }
+
+    // Skip if user has scrolled recently (unless force center is triggered)
+    if (!forceCenterChanged && userScrollRef.current.hasScrolled &&
+        Date.now() - userScrollRef.current.lastScrollTime < 30000) {
+      console.log('Skipping auto-scroll - user scrolled recently');
+      return;
+    }
+
+    const scrollToX = Math.max(0, (currentReadingIndex * dotSpacing) - (screenWidth / 2));
+    console.log(`Auto-scrolling to current reading at index ${currentReadingIndex}, x=${scrollToX} (zoom: ${zoomChanged}, force: ${forceCenterChanged})`);
+
+    setTimeout(() => {
+      scrollViewRef.current?.scrollTo({
+        x: scrollToX,
+        y: 0,
+        animated: true
+      });
+    }, 300);
+  }, [hoursInViewport, forceCenter, hasCurrentReading, currentReadingIndex, dotSpacing, screenWidth]);
+
+  // Auto-refresh viewport for new current readings
+  useEffect(() => {
+    const refreshInterval = setInterval(() => {
+      console.log('Auto-refresh: Checking if re-centering needed');
+
+      // Check if we should auto-scroll to keep current value in view
+      const timeSinceLastScroll = Date.now() - userScrollRef.current.lastScrollTime;
+
+      if (timeSinceLastScroll > 30000) { // If user hasn't scrolled for 30 seconds
+        console.log('Auto-centering due to time-based refresh (user inactive)');
+        userScrollRef.current.hasScrolled = false;
+        setForceCenter(prev => prev + 1); // Trigger re-center through the main useEffect
+      }
+    }, 5 * 60 * 1000); // Every 5 minutes
+
+    return () => clearInterval(refreshInterval);
+  }, []); // No dependencies - use refs instead
+
+  // Early return for empty data - after all hooks are declared
+  if (readings.length === 0) {
+    return (
+      <View style={styles.container}>
+        <View style={styles.emptyState}>
+          <Text style={styles.emptyText}>No glucose data available</Text>
+          <Text style={styles.emptySubtext}>Start simulation to see your glucose trend</Text>
+        </View>
+      </View>
+    );
+  }
 
   return (
     <View style={styles.container}>
@@ -259,10 +296,50 @@ export function GlucoseChart({
             <Text style={styles.timeRangeText}>{hoursInViewport}h</Text>
           </TouchableOpacity>
           {onResetSimulation && (
-            <TouchableOpacity style={styles.resetButton} onPress={onResetSimulation}>
-              <Text style={styles.resetButtonText}>Reset</Text>
+            <TouchableOpacity
+              style={[styles.resetButton, { backgroundColor: '#ff0000', minWidth: 80, minHeight: 40 }]}
+              onPress={() => {
+                console.log('🟥🟥🟥 RESET BUTTON PRESSED IN CHART 🟥🟥🟥');
+                console.log('🔍 onResetSimulation type:', typeof onResetSimulation);
+                console.log('🔍 onResetSimulation exists:', !!onResetSimulation);
+                console.log('🔍 onResetSimulation function:', onResetSimulation);
+
+                if (!onResetSimulation) {
+                  alert('ERROR: onResetSimulation function is not provided!');
+                  return;
+                }
+
+                alert('Reset button was pressed! About to call reset function...');
+
+                try {
+                  console.log('📞📞📞 CALLING onResetSimulation... 📞📞📞');
+                  const result = onResetSimulation();
+                  console.log('📞 onResetSimulation returned:', result);
+                  if (result instanceof Promise) {
+                    console.log('📞 Function returned a Promise, waiting...');
+                    result.then(() => {
+                      console.log('✅✅✅ onResetSimulation Promise completed ✅✅✅');
+                      alert('Reset completed successfully!');
+                    }).catch((error) => {
+                      console.error('❌❌❌ onResetSimulation Promise failed:', error);
+                      alert('Reset failed: ' + error.message);
+                    });
+                  } else {
+                    console.log('✅✅✅ onResetSimulation call completed ✅✅✅');
+                    alert('Reset completed successfully!');
+                  }
+                } catch (error) {
+                  console.error('❌❌❌ Error calling onResetSimulation:', error);
+                  alert('Error: ' + error.message);
+                }
+              }}
+            >
+              <Text style={[styles.resetButtonText, { fontSize: 14, fontWeight: 'bold' }]}>RESET</Text>
             </TouchableOpacity>
           )}
+          <Text style={{ fontSize: 12, color: '#666', textAlign: 'center' }}>
+            Reset button should be visible above
+          </Text>
         </View>
       </View>
 
@@ -271,14 +348,39 @@ export function GlucoseChart({
         <Text style={{ fontSize: 12, color: '#666', marginBottom: 5 }}>
           Glucose Timeline: {chartData.length} points - scrollable 24h+
         </Text>
-        <LineChart
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={true}
+          ref={scrollViewRef}
+          style={{ width: screenWidth - 40 }}
+          onScroll={(event) => {
+            // Track user scroll activity
+            userScrollRef.current.hasScrolled = true;
+            userScrollRef.current.lastScrollTime = Date.now();
+
+            // Clear existing timeout
+            if (scrollTimeoutRef.current) {
+              clearTimeout(scrollTimeoutRef.current);
+            }
+
+            // Reset scroll state after 30 seconds of inactivity
+            scrollTimeoutRef.current = setTimeout(() => {
+              console.log('30s timeout - triggering re-center to red dot');
+              userScrollRef.current.hasScrolled = false;
+              setForceCenter(prev => prev + 1); // Trigger re-center to red dot
+            }, 30000);
+          }}
+          scrollEventThrottle={100}
+        >
+          <View style={{ paddingBottom: 20 }}>
+            <LineChart
           data={chartData}
           width={fullChartWidth}
           height={CHART_HEIGHT}
 
-          // Basic styling
-          color1="#cccccc"
-          thickness1={2}
+          // Basic styling - hide the line, keep only dots
+          color1="transparent"
+          thickness1={0}
 
           // Data points - will use individual colors from data
           hideDataPoints={false}
@@ -298,17 +400,20 @@ export function GlucoseChart({
           rulesColor="#f3f4f6"
 
           // Scrolling - key properties
-          spacing={scrollSpacing}
+          spacing={dotSpacing}
           initialSpacing={20}
           endSpacing={20}
 
-          // Auto-scroll to current reading
+          // Disable built-in scrolling since we use ScrollView
           scrollToEnd={false}
           scrollAnimation={false}
+          disableScroll={true}
 
           // Performance
           animateOnDataChange={false}
-        />
+            />
+          </View>
+        </ScrollView>
       </View>
 
       {/* Legend */}
