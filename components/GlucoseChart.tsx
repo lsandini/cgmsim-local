@@ -23,18 +23,19 @@ export function GlucoseChart({
 }: GlucoseChartProps) {
   const [hoursInViewport, setHoursInViewport] = useState(3); // Default to 3 hours
   const [forceCenter, setForceCenter] = useState(0); // Trigger for forcing re-center
+  const [isInitialLoad, setIsInitialLoad] = useState(true); // Track initial load
   const windowDimensions = useWindowDimensions();
   const screenWidth = windowDimensions.width;
   const screenHeight = windowDimensions.height;
-  const scrollViewRef = useRef(null);
+  const scrollViewRef = useRef<ScrollView>(null);
   const scrollTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const userScrollRef = useRef({ hasScrolled: false, lastScrollTime: 0 });
 
   // Chart dimensions
   const isLandscape = screenWidth > screenHeight;
   const CHART_HEIGHT = isLandscape
-    ? Math.min(screenHeight - 120, 400)
-    : Math.min(screenHeight * 0.4, 350);
+    ? Math.min(screenHeight - 140, 320)
+    : Math.min(screenHeight * 0.3, 280);
 
   // Function to cycle through time ranges
   const cycleTimeRange = () => {
@@ -75,9 +76,25 @@ export function GlucoseChart({
       // Inject test data points for scrolling verification
       if (!actualReading) {
         if (Math.abs(time - testTime4hAgo) <= (2.5 * 60 * 1000)) {
-          actualReading = { timestamp: new Date(time), value: 180, isFuture: false };
+          actualReading = {
+            id: `test_4h_${time}`,
+            timestamp: new Date(time),
+            value: 180,
+            isFuture: false,
+            iob: 0,
+            cob: 0,
+            patientId: 'test'
+          };
         } else if (Math.abs(time - testTime6hAgo) <= (2.5 * 60 * 1000)) {
-          actualReading = { timestamp: new Date(time), value: 200, isFuture: false };
+          actualReading = {
+            id: `test_6h_${time}`,
+            timestamp: new Date(time),
+            value: 200,
+            isFuture: false,
+            iob: 0,
+            cob: 0,
+            patientId: 'test'
+          };
         }
       }
 
@@ -217,21 +234,27 @@ export function GlucoseChart({
     prevHoursInViewport.current = hoursInViewport;
     prevForceCenter.current = forceCenter;
 
-    // Only proceed if zoom or forceCenter actually changed
-    if (!zoomChanged && !forceCenterChanged) {
+    // Proceed if: zoom changed, force center triggered, OR initial load
+    if (!zoomChanged && !forceCenterChanged && !isInitialLoad) {
       console.log('Skipping auto-scroll - no actual trigger');
       return;
     }
 
+    // Mark initial load as complete
+    if (isInitialLoad) {
+      console.log('Initial load detected - auto-scrolling to current reading');
+      setIsInitialLoad(false);
+    }
+
     // Skip if user has scrolled recently (unless force center is triggered)
     if (!forceCenterChanged && userScrollRef.current.hasScrolled &&
-        Date.now() - userScrollRef.current.lastScrollTime < 30000) {
+        Date.now() - userScrollRef.current.lastScrollTime < 10000) {
       console.log('Skipping auto-scroll - user scrolled recently');
       return;
     }
 
     const scrollToX = Math.max(0, (currentReadingIndex * dotSpacing) - (screenWidth / 2));
-    console.log(`Auto-scrolling to current reading at index ${currentReadingIndex}, x=${scrollToX} (zoom: ${zoomChanged}, force: ${forceCenterChanged})`);
+    console.log(`Auto-scrolling to current reading at index ${currentReadingIndex}, x=${scrollToX} (zoom: ${zoomChanged}, force: ${forceCenterChanged}, initial: ${isInitialLoad})`);
 
     setTimeout(() => {
       scrollViewRef.current?.scrollTo({
@@ -240,7 +263,7 @@ export function GlucoseChart({
         animated: true
       });
     }, 300);
-  }, [hoursInViewport, forceCenter, hasCurrentReading, currentReadingIndex, dotSpacing, screenWidth]);
+  }, [hoursInViewport, forceCenter, hasCurrentReading, currentReadingIndex, dotSpacing, screenWidth, isInitialLoad]);
 
   // Auto-refresh viewport for new current readings
   useEffect(() => {
@@ -250,7 +273,7 @@ export function GlucoseChart({
       // Check if we should auto-scroll to keep current value in view
       const timeSinceLastScroll = Date.now() - userScrollRef.current.lastScrollTime;
 
-      if (timeSinceLastScroll > 30000) { // If user hasn't scrolled for 30 seconds
+      if (timeSinceLastScroll > 10000) { // If user hasn't scrolled for 10 seconds
         console.log('Auto-centering due to time-based refresh (user inactive)');
         userScrollRef.current.hasScrolled = false;
         setForceCenter(prev => prev + 1); // Trigger re-center through the main useEffect
@@ -313,24 +336,26 @@ export function GlucoseChart({
 
                 try {
                   console.log('📞📞📞 CALLING onResetSimulation... 📞📞📞');
-                  const result = onResetSimulation();
+                  const result: any = onResetSimulation();
                   console.log('📞 onResetSimulation returned:', result);
-                  if (result instanceof Promise) {
+
+                  // Check if result is a Promise by testing for 'then' method
+                  if (result != null && typeof result === 'object' && 'then' in result && typeof result.then === 'function') {
                     console.log('📞 Function returned a Promise, waiting...');
                     result.then(() => {
                       console.log('✅✅✅ onResetSimulation Promise completed ✅✅✅');
                       alert('Reset completed successfully!');
-                    }).catch((error) => {
+                    }).catch((error: any) => {
                       console.error('❌❌❌ onResetSimulation Promise failed:', error);
-                      alert('Reset failed: ' + error.message);
+                      alert('Reset failed: ' + (error?.message || error));
                     });
                   } else {
                     console.log('✅✅✅ onResetSimulation call completed ✅✅✅');
                     alert('Reset completed successfully!');
                   }
-                } catch (error) {
+                } catch (error: any) {
                   console.error('❌❌❌ Error calling onResetSimulation:', error);
-                  alert('Error: ' + error.message);
+                  alert('Error: ' + (error?.message || error));
                 }
               }}
             >
@@ -348,72 +373,103 @@ export function GlucoseChart({
         <Text style={{ fontSize: 12, color: '#666', marginBottom: 5 }}>
           Glucose Timeline: {chartData.length} points - scrollable 24h+
         </Text>
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={true}
-          ref={scrollViewRef}
-          style={{ width: screenWidth - 40 }}
-          onScroll={(event) => {
-            // Track user scroll activity
-            userScrollRef.current.hasScrolled = true;
-            userScrollRef.current.lastScrollTime = Date.now();
-
-            // Clear existing timeout
-            if (scrollTimeoutRef.current) {
-              clearTimeout(scrollTimeoutRef.current);
-            }
-
-            // Reset scroll state after 30 seconds of inactivity
-            scrollTimeoutRef.current = setTimeout(() => {
-              console.log('30s timeout - triggering re-center to red dot');
-              userScrollRef.current.hasScrolled = false;
-              setForceCenter(prev => prev + 1); // Trigger re-center to red dot
-            }, 30000);
-          }}
-          scrollEventThrottle={100}
-        >
-          <View style={{ paddingBottom: 20 }}>
+        <View style={{ flexDirection: 'row', width: screenWidth - 40 }}>
+          {/* Y-axis stays fixed on the left */}
+          <View style={{ width: 60, justifyContent: 'center' }}>
             <LineChart
-          data={chartData}
-          width={fullChartWidth}
-          height={CHART_HEIGHT}
-
-          // Basic styling - hide the line, keep only dots
-          color1="transparent"
-          thickness1={0}
-
-          // Data points - will use individual colors from data
-          hideDataPoints={false}
-
-          // Y-axis
-          maxValue={400}
-          minValue={40}
-          noOfSections={7}
-          yAxisColor="#9ca3af"
-          yAxisTextStyle={{ color: '#6b7280', fontSize: 12 }}
-
-          // X-axis
-          xAxisColor="#9ca3af"
-
-          // Grid
-          rulesType="solid"
-          rulesColor="#f3f4f6"
-
-          // Scrolling - key properties
-          spacing={dotSpacing}
-          initialSpacing={20}
-          endSpacing={20}
-
-          // Disable built-in scrolling since we use ScrollView
-          scrollToEnd={false}
-          scrollAnimation={false}
-          disableScroll={true}
-
-          // Performance
-          animateOnDataChange={false}
+              data={[]} // Empty data for Y-axis only
+              width={60}
+              height={CHART_HEIGHT}
+              maxValue={400}
+              noOfSections={7}
+              yAxisColor="#9ca3af"
+              yAxisTextStyle={{ color: '#6b7280', fontSize: 12 }}
+              hideDataPoints={true}
+              color1="transparent"
+              thickness1={0}
+              xAxisColor="transparent"
+              hideYAxisText={false}
+              rulesType="solid"
+              rulesColor="#f3f4f6"
+              showVerticalLines={false}
+              spacing={0}
+              initialSpacing={0}
+              endSpacing={0}
             />
           </View>
-        </ScrollView>
+
+          {/* Scrollable chart area without Y-axis */}
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={true}
+            ref={scrollViewRef}
+            style={{ flex: 1 }}
+            onScroll={(event) => {
+              // Track user scroll activity
+              userScrollRef.current.hasScrolled = true;
+              userScrollRef.current.lastScrollTime = Date.now();
+
+              // Clear existing timeout
+              if (scrollTimeoutRef.current) {
+                clearTimeout(scrollTimeoutRef.current);
+              }
+
+              // Reset scroll state after 10 seconds of inactivity
+              scrollTimeoutRef.current = setTimeout(() => {
+                console.log('10s timeout - triggering re-center to red dot');
+                userScrollRef.current.hasScrolled = false;
+                setForceCenter(prev => prev + 1); // Trigger re-center to red dot
+              }, 10000);
+            }}
+            scrollEventThrottle={100}
+          >
+            <View style={{ paddingBottom: 20 }}>
+              <LineChart
+                data={chartData}
+                width={fullChartWidth}
+                height={CHART_HEIGHT}
+
+                // Basic styling - hide the line, keep only dots
+                color1="transparent"
+                thickness1={0}
+
+                // Data points - will use individual colors from data
+                hideDataPoints={false}
+
+                // Hide Y-axis since it's shown separately
+                yAxisColor="transparent"
+                hideYAxisText={true}
+                yAxisLabelWidth={0}
+
+                // X-axis
+                xAxisColor="#9ca3af"
+
+                // Grid - only vertical lines
+                rulesType="solid"
+                rulesColor="#f3f4f6"
+                showYAxisIndices={false}
+                showVerticalLines={false}
+
+                // Scrolling - key properties
+                spacing={dotSpacing}
+                initialSpacing={20}
+                endSpacing={20}
+
+                // Disable built-in scrolling since we use ScrollView
+                scrollToEnd={false}
+                scrollAnimation={false}
+                disableScroll={true}
+
+                // Performance
+                animateOnDataChange={false}
+
+                // Max value must match the fixed Y-axis
+                maxValue={400}
+                noOfSections={7}
+              />
+            </View>
+          </ScrollView>
+        </View>
       </View>
 
       {/* Legend */}

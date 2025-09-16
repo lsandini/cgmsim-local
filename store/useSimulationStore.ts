@@ -577,10 +577,9 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
           glucoseReadings: [],
           recentTreatments: [],
           simulationState: {
-            isRunning: false,
             isComputing: false,
-            currentGlucose: 120, // Reset to reasonable baseline
             lastComputedAt: new Date(),
+            nextComputationTime: new Date(),
             computedUntil: new Date(),
           },
           nextReadingTime: null,
@@ -661,10 +660,9 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
       // Update current glucose to match the latest reading
       set({
         simulationState: {
-          isRunning: false,
           isComputing: false,
-          currentGlucose: currentGlucoseValue,
           lastComputedAt: new Date(),
+          nextComputationTime: new Date(alignedNow.getTime() + (5 * 60 * 1000)), // Next computation in 5 min
           computedUntil: new Date(alignedNow.getTime() + (2 * 60 * 60 * 1000)), // 2h future
         }
       });
