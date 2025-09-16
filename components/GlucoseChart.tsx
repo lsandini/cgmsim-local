@@ -369,9 +369,9 @@ export function GlucoseChart({
 
       {/* Chart */}
       <View style={styles.chartContainer}>
-        <View style={{ flexDirection: 'row', width: screenWidth - 40 }}>
+        <View style={{ flexDirection: 'row', width: screenWidth - 40, alignItems: 'flex-start' }}>
           {/* Y-axis stays fixed on the left */}
-          <View style={{ width: 60, justifyContent: 'center' }}>
+          <View style={{ width: 60 }}>
             <LineChart
               data={[{value: 40}, {value: 400}]} // Min and max to establish range
               width={60}
@@ -379,17 +379,21 @@ export function GlucoseChart({
               maxValue={400}
               mostNegativeValue={40}
               noOfSections={8}
-              stepValue={(400-40)/8} // Explicit step value: 45
-              yAxisLabelTexts={['40', '70', '100', '140', '180', '250', '320', '360', '400']} // Clinical glucose values
+              stepValue={45} // Explicit step value: (400-40)/8 = 45
+              yAxisLabelTexts={['40', '85', '130', '175', '220', '265', '310', '355', '400']} // Linear scale matching steps
               yAxisColor="#9ca3af"
               yAxisTextStyle={{ color: '#6b7280', fontSize: 10 }}
+              yAxisThickness={1}
+              yAxisOffset={0}
               hideDataPoints={true}
               color1="transparent"
               thickness1={0}
               xAxisColor="transparent"
+              xAxisThickness={0}
               hideYAxisText={false}
               rulesType="solid"
-              rulesColor="#f3f4f6"
+              rulesColor="#e5e7eb"
+              rulesThickness={1}
               showVerticalLines={false}
               spacing={0}
               initialSpacing={0}
@@ -422,7 +426,7 @@ export function GlucoseChart({
             }}
             scrollEventThrottle={100}
           >
-            <View style={{ paddingBottom: 20 }}>
+            <View>
               <LineChart
                 data={chartData}
                 width={fullChartWidth}
@@ -439,13 +443,17 @@ export function GlucoseChart({
                 yAxisColor="transparent"
                 hideYAxisText={true}
                 yAxisLabelWidth={0}
+                yAxisThickness={0}
+                yAxisOffset={0}
 
                 // X-axis
                 xAxisColor="#9ca3af"
+                xAxisThickness={1}
 
-                // Grid - only horizontal lines matching the Y-axis
+                // Grid - MUST match Y-axis chart exactly
                 rulesType="solid"
-                rulesColor="#f3f4f6"
+                rulesColor="#e5e7eb"
+                rulesThickness={1}
                 showYAxisIndices={false}
                 showVerticalLines={false}
 
@@ -462,11 +470,11 @@ export function GlucoseChart({
                 // Performance
                 animateOnDataChange={false}
 
-                // CRITICAL: Match exact scaling of Y-axis chart
+                // CRITICAL: Match EXACT scaling of Y-axis chart
                 maxValue={400}
                 mostNegativeValue={40}
                 noOfSections={8}
-                stepValue={(400-40)/8} // Same explicit step value: 45
+                stepValue={45} // Same explicit step value as Y-axis chart
               />
             </View>
           </ScrollView>
