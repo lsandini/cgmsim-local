@@ -34,7 +34,7 @@ export function GlucoseChart({
   // Chart dimensions
   const isLandscape = screenWidth > screenHeight;
   const CHART_HEIGHT = isLandscape
-    ? Math.min(screenHeight - 140, 320)
+    ? Math.min(screenHeight - 220, 180)
     : Math.min(screenHeight * 0.3, 280);
 
   // Function to cycle through time ranges
@@ -167,6 +167,8 @@ export function GlucoseChart({
     dataPointRadius: point.isCurrent ? 6 : 4,
     showDataPoint: point.hasData, // Only show dots where we have data
   }));
+
+  // Use chartData directly without anchor points - rely on explicit scaling properties instead
 
   // Create metadata for dot styling (we'll use this for custom rendering if needed)
   const dotMetadata = fullTimeline.map(point => ({
@@ -320,7 +322,7 @@ export function GlucoseChart({
           </TouchableOpacity>
           {onResetSimulation && (
             <TouchableOpacity
-              style={[styles.resetButton, { backgroundColor: '#ff0000', minWidth: 80, minHeight: 40 }]}
+              style={styles.resetButton}
               onPress={() => {
                 console.log('🟥🟥🟥 RESET BUTTON PRESSED IN CHART 🟥🟥🟥');
                 console.log('🔍 onResetSimulation type:', typeof onResetSimulation);
@@ -359,31 +361,28 @@ export function GlucoseChart({
                 }
               }}
             >
-              <Text style={[styles.resetButtonText, { fontSize: 14, fontWeight: 'bold' }]}>RESET</Text>
+              <Text style={styles.resetButtonText}>RESET</Text>
             </TouchableOpacity>
           )}
-          <Text style={{ fontSize: 12, color: '#666', textAlign: 'center' }}>
-            Reset button should be visible above
-          </Text>
         </View>
       </View>
 
       {/* Chart */}
       <View style={styles.chartContainer}>
-        <Text style={{ fontSize: 12, color: '#666', marginBottom: 5 }}>
-          Glucose Timeline: {chartData.length} points - scrollable 24h+
-        </Text>
         <View style={{ flexDirection: 'row', width: screenWidth - 40 }}>
           {/* Y-axis stays fixed on the left */}
           <View style={{ width: 60, justifyContent: 'center' }}>
             <LineChart
-              data={[]} // Empty data for Y-axis only
+              data={[{value: 40}, {value: 400}]} // Min and max to establish range
               width={60}
               height={CHART_HEIGHT}
               maxValue={400}
-              noOfSections={7}
+              mostNegativeValue={40}
+              noOfSections={8}
+              stepValue={(400-40)/8} // Explicit step value: 45
+              yAxisLabelTexts={['40', '70', '100', '140', '180', '250', '320', '360', '400']} // Clinical glucose values
               yAxisColor="#9ca3af"
-              yAxisTextStyle={{ color: '#6b7280', fontSize: 12 }}
+              yAxisTextStyle={{ color: '#6b7280', fontSize: 10 }}
               hideDataPoints={true}
               color1="transparent"
               thickness1={0}
@@ -444,7 +443,7 @@ export function GlucoseChart({
                 // X-axis
                 xAxisColor="#9ca3af"
 
-                // Grid - only vertical lines
+                // Grid - only horizontal lines matching the Y-axis
                 rulesType="solid"
                 rulesColor="#f3f4f6"
                 showYAxisIndices={false}
@@ -463,9 +462,11 @@ export function GlucoseChart({
                 // Performance
                 animateOnDataChange={false}
 
-                // Max value must match the fixed Y-axis
+                // CRITICAL: Match exact scaling of Y-axis chart
                 maxValue={400}
-                noOfSections={7}
+                mostNegativeValue={40}
+                noOfSections={8}
+                stepValue={(400-40)/8} // Same explicit step value: 45
               />
             </View>
           </ScrollView>
