@@ -1,5 +1,5 @@
 #!/bin/bash
 
 git add .
-git commit -m "graph enhancements IV - Y-axis headaches"
+git commit -m "added plans and ideas"
 git push -u origin feature/glucose-chart-updates
