@@ -54,10 +54,25 @@ export function GlucoseChart({
   const createFullTimeline = () => {
     const timeline = [];
     const intervalMs = 5 * 60 * 1000; // 5 minutes
-    const startTime = now.getTime() - (24 * 60 * 60 * 1000); // 24h ago
-    const endTime = now.getTime() + (2 * 60 * 60 * 1000); // 2h future
 
-    console.log(`Creating timeline from ${new Date(startTime)} to ${new Date(endTime)}`);
+    // Round start time DOWN to nearest 5-minute interval to ensure alignment
+    const rawStartTime = now.getTime() - (24 * 60 * 60 * 1000); // 24h ago
+    const startDate = new Date(rawStartTime);
+    startDate.setMinutes(Math.floor(startDate.getMinutes() / 5) * 5); // Round down to nearest 5 min
+    startDate.setSeconds(0);
+    startDate.setMilliseconds(0);
+    const startTime = startDate.getTime();
+
+    // Round end time UP to nearest 5-minute interval
+    const rawEndTime = now.getTime() + (2 * 60 * 60 * 1000); // 2h future
+    const endDate = new Date(rawEndTime);
+    endDate.setMinutes(Math.ceil(endDate.getMinutes() / 5) * 5); // Round up to nearest 5 min
+    endDate.setSeconds(0);
+    endDate.setMilliseconds(0);
+    const endTime = endDate.getTime();
+
+    console.log(`Creating timeline from ${format(new Date(startTime), 'MMM dd HH:mm')} to ${format(new Date(endTime), 'MMM dd HH:mm')}`);
+    console.log(`Start minutes: ${new Date(startTime).getMinutes()}, End minutes: ${new Date(endTime).getMinutes()}`);
     console.log(`Available readings: ${readings.length}, first: ${readings[0]?.timestamp}, last: ${readings[readings.length-1]?.timestamp}`);
 
     // Add test data points for scrolling verification
@@ -160,13 +175,55 @@ export function GlucoseChart({
 
   // STEP 1: Create simple chart data for react-native-gifted-charts
   // Convert timeline to gifted-charts format
-  const chartData = fullTimeline.map((point, index) => ({
-    value: point.value, // Always use the point's value (actual data or baseline)
-    label: index % 72 === 0 ? format(point.timestamp, 'HH:mm') : '', // Labels every 6h
-    dataPointColor: point.isCurrent ? '#ef4444' : point.isFuture ? '#6b7280' : '#000000',
-    dataPointRadius: point.isCurrent ? 6 : 4,
-    showDataPoint: point.hasData, // Only show dots where we have data
-  }));
+  const chartData = fullTimeline.map((point, index) => {
+    // Get the minutes of this timestamp
+    const minutes = point.timestamp.getMinutes();
+
+    // Check if this is EXACTLY at :00 or :30
+    const isExact30MinMark = (minutes === 0 || minutes === 30);
+    const isHourMark = (minutes === 0);
+
+    // Determine if we should show a label
+    let showLabel = false;
+    const hours = point.timestamp.getHours();
+
+    if (hoursInViewport === 1) {
+      // For 1h view, show every hour
+      showLabel = isHourMark;
+    } else if (hoursInViewport === 3) {
+      // For 3h view, show every hour
+      showLabel = isHourMark;
+    } else if (hoursInViewport === 6) {
+      // For 6h view, show every 2 hours
+      showLabel = isHourMark && (hours % 2 === 0);
+    }
+
+    // Format time in 12-hour format with fixed 5-character length
+    let formattedLabel = '';
+    if (showLabel) {
+      const period = hours >= 12 ? 'PM' : 'AM';
+      const displayHours = hours === 0 ? 12 : hours > 12 ? hours - 12 : hours;
+
+      // Force exactly 5 characters by padding
+      const baseLabel = `${displayHours}${period}`;
+      formattedLabel = baseLabel.padStart(2, ' ');
+    }
+
+    return {
+      value: point.value, // Always use the point's value (actual data or baseline)
+      // Show labels in 12-hour format
+      label: formattedLabel,
+      labelTextStyle: {
+        color: '#6b7280', // Gray color like in the Dexcom app
+        fontSize: 10,
+        fontWeight: '400' as const,
+        textAlign: 'center' as const
+      },
+      dataPointColor: point.isCurrent ? '#ef4444' : point.isFuture ? '#6b7280' : '#000000',
+      dataPointRadius: point.isCurrent ? 6 : 4,
+      showDataPoint: point.hasData, // Only show dots where we have data
+    };
+  });
 
   // Use chartData directly without anchor points - rely on explicit scaling properties instead
 
@@ -208,8 +265,9 @@ export function GlucoseChart({
   console.log(`Dot spacing: ${dotSpacing.toFixed(1)}px`);
   console.log(`Full chart width: ${fullChartWidth.toFixed(0)}px for ${chartData.length} timeline points`);
 
-  // X-axis labels are created within the chartData array
-  console.log(`Created ${chartData.filter(p => p.label !== '').length} time labels (every 6h)`);
+  // X-axis labels and tick marks
+  const labelsCount = chartData.filter(p => p.label !== '').length;
+  console.log(`Created ${labelsCount} time labels in 12-hour format (e.g., 7PM, 8AM)`);
 
   // === STEP 5: BASIC VIEWPORT INFO ===
   useEffect(() => {
@@ -426,7 +484,7 @@ export function GlucoseChart({
             }}
             scrollEventThrottle={100}
           >
-            <View>
+            <View style={{ paddingBottom: 20 }}>
               <LineChart
                 data={chartData}
                 width={fullChartWidth}
@@ -449,6 +507,14 @@ export function GlucoseChart({
                 // X-axis
                 xAxisColor="#9ca3af"
                 xAxisThickness={1}
+                xAxisLabelsVerticalShift={5}
+                xAxisLabelsHeight={25}
+                xAxisLabelTextStyle={{
+                  color: '#6b7280',
+                  fontSize: 10,
+                  textAlign: 'center'
+                }}
+                adjustToWidth={false}
 
                 // Grid - MUST match Y-axis chart exactly
                 rulesType="solid"
@@ -461,6 +527,9 @@ export function GlucoseChart({
                 spacing={dotSpacing}
                 initialSpacing={20}
                 endSpacing={20}
+
+                // Ensure labels have enough space
+                labelsExtraHeight={20}
 
                 // Disable built-in scrolling since we use ScrollView
                 scrollToEnd={false}
