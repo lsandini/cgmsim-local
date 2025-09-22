@@ -307,6 +307,67 @@ class Database {
     return nextReading ? new Date(nextReading.timestamp) : null;
   }
 
+  // Insert a single glucose reading
+  async insertGlucoseReading(reading: GlucoseReading): Promise<void> {
+    if (!this.db) throw new Error('Database not initialized');
+
+    await this.db.runAsync(
+      `INSERT OR REPLACE INTO glucose_readings
+       (id, timestamp, value, iob, cob, isFuture, patientId)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        reading.id,
+        reading.timestamp.toISOString(),
+        reading.value,
+        reading.iob,
+        reading.cob,
+        reading.isFuture ? 1 : 0,
+        reading.patientId,
+      ]
+    );
+  }
+
+  // Clear all glucose data for a patient
+  async clearGlucoseData(patientId: string): Promise<void> {
+    if (!this.db) throw new Error('Database not initialized');
+
+    // First check how many readings exist
+    const beforeCount = await this.db.getFirstAsync<{count: number}>(
+      'SELECT COUNT(*) as count FROM glucose_readings WHERE patientId = ?',
+      [patientId]
+    );
+    console.log(`🗑️ Before clearing: ${beforeCount?.count || 0} readings for patient ${patientId}`);
+
+    await this.db.runAsync(
+      'DELETE FROM glucose_readings WHERE patientId = ?',
+      [patientId]
+    );
+
+    // Verify the clearing worked
+    const afterCount = await this.db.getFirstAsync<{count: number}>(
+      'SELECT COUNT(*) as count FROM glucose_readings WHERE patientId = ?',
+      [patientId]
+    );
+    console.log(`🗑️ After clearing: ${afterCount?.count || 0} readings remain for patient ${patientId}`);
+
+    if ((afterCount?.count || 0) > 0) {
+      console.error(`⚠️ WARNING: Database clearing failed! ${afterCount?.count} readings still exist`);
+    } else {
+      console.log(`✅ Database cleared successfully for patient ${patientId}`);
+    }
+  }
+
+  // Clear all treatments for a patient
+  async clearTreatments(patientId: string): Promise<void> {
+    if (!this.db) throw new Error('Database not initialized');
+
+    await this.db.runAsync(
+      'DELETE FROM treatments WHERE patientId = ?',
+      [patientId]
+    );
+    console.log(`Cleared all treatments for patient ${patientId}`);
+  }
+
   // Cleanup old data
   async cleanupOldData(patientId: string, before: Date): Promise<void> {
     if (!this.db) throw new Error('Database not initialized');

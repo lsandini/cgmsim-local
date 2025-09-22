@@ -78,6 +78,7 @@ interface SimulationStore {
   stopCGMTimer: () => void;
   advanceToNextReading: () => Promise<void>;
   clearError: () => void;
+  resetSimulationWithStableData: () => Promise<void>;
 }
 
 // Helper functions for AsyncStorage persistence
@@ -296,7 +297,23 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
       // Include future predictions up to specified hours forward
       const to = new Date(now.getTime() + hoursForward * 60 * 60 * 1000);
 
+      console.log(`📊 loadGlucoseData: Loading data for patient ${currentPatientId}`);
+      console.log(`📊 Time range: ${from.toLocaleString()} to ${to.toLocaleString()}`);
+
       const allReadings = await database.getGlucoseReadings(currentPatientId, from, to);
+
+      console.log(`📊 loadGlucoseData: Retrieved ${allReadings.length} readings from database`);
+      if (allReadings.length > 0) {
+        console.log(`📊 First reading: ${allReadings[0].timestamp.toLocaleString()} = ${allReadings[0].value} mg/dL`);
+        console.log(`📊 Last reading: ${allReadings[allReadings.length-1].timestamp.toLocaleString()} = ${allReadings[allReadings.length-1].value} mg/dL`);
+
+        // Check for any readings with very high values (like 400)
+        const highReadings = allReadings.filter(r => r.value > 300);
+        if (highReadings.length > 0) {
+          console.log(`⚠️ Found ${highReadings.length} readings with values > 300 mg/dL:`);
+          highReadings.forEach(r => console.log(`   ${r.timestamp.toLocaleString()}: ${r.value} mg/dL`));
+        }
+      }
 
       // Include both historical and future readings (up to 1 hour of predictions)
       set({ glucoseReadings: allReadings });
@@ -313,9 +330,13 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
       const { currentPatient, recentTreatments, simulationState } = get();
       if (!currentPatient || simulationState.isComputing) return;
 
-      set({ 
-        simulationState: { 
-          ...simulationState, 
+      console.log('🚀 STARTING SIMULATION...');
+      console.log(`🚀 Patient currentGlucose: ${currentPatient.currentGlucose} mg/dL`);
+      console.log(`🚀 Recent treatments: ${recentTreatments.length}`);
+
+      set({
+        simulationState: {
+          ...simulationState,
           isComputing: true,
           lastComputedAt: new Date(),
         }
@@ -335,13 +356,28 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
       await database.clearFutureReadings(currentPatient.id, now);
 
       // Generate new simulation data
+      console.log('🚀 About to generate future readings...');
       const futureReadings = glucoseSimulator.simulateForward(
         currentPatient,
         relevantTreatments,
         12 // 12 hours forward
       );
 
+      console.log(`🚀 Generated ${futureReadings.length} future readings`);
+      if (futureReadings.length > 0) {
+        console.log(`🚀 First future reading: ${futureReadings[0].timestamp.toLocaleString()} = ${futureReadings[0].value} mg/dL`);
+        console.log(`🚀 Last future reading: ${futureReadings[futureReadings.length-1].timestamp.toLocaleString()} = ${futureReadings[futureReadings.length-1].value} mg/dL`);
+
+        // Check for high values
+        const highValues = futureReadings.filter(r => r.value > 300);
+        if (highValues.length > 0) {
+          console.log(`⚠️ Generated ${highValues.length} future readings with values > 300 mg/dL`);
+          console.log(`⚠️ First high value: ${highValues[0].timestamp.toLocaleString()} = ${highValues[0].value} mg/dL`);
+        }
+      }
+
       // Save readings to database
+      console.log('🚀 Saving future readings to database...');
       await database.saveGlucoseReadings(futureReadings);
 
       // Update simulation state
@@ -463,5 +499,189 @@ export const useSimulationStore = create<SimulationStore>((set, get) => ({
   // Clear error state
   clearError: () => {
     set({ error: null });
+  },
+
+  resetSimulationWithStableData: async () => {
+    console.log('🔄 RESET BUTTON PRESSED - Starting complete reset...');
+    const { currentPatient } = get();
+    if (!currentPatient) {
+      console.log('❌ No current patient for reset');
+      return;
+    }
+
+    try {
+      console.log('🧹 Completely resetting simulation - clearing ALL data...');
+
+      // Stop current CGM timer
+      const { cgmTimer } = get();
+      if (cgmTimer) {
+        clearInterval(cgmTimer);
+      }
+
+      // Check what data exists before clearing
+      console.log('🔍 STEP 1: Checking existing data...');
+      try {
+        const beforeReadings = await database.getGlucoseReadings(
+          currentPatient.id,
+          new Date(Date.now() - 48 * 60 * 60 * 1000), // 48h ago
+          new Date(Date.now() + 24 * 60 * 60 * 1000)   // 24h future
+        );
+        console.log(`📊 Before reset: ${beforeReadings.length} glucose readings found`);
+      } catch (error) {
+        console.error('❌ Failed to check existing data:', error);
+        throw error;
+      }
+
+      // Clear ALL glucose data (including future predictions)
+      console.log('🔍 STEP 2: Clearing glucose data...');
+      try {
+        await database.clearGlucoseData(currentPatient.id);
+        console.log('🗑️ Cleared all glucose data from database');
+      } catch (error) {
+        console.error('❌ Failed to clear glucose data:', error);
+        throw error;
+      }
+
+      // Also clear any treatments that might be affecting future predictions
+      console.log('🔍 STEP 3: Clearing treatments...');
+      try {
+        await database.clearTreatments(currentPatient.id);
+        console.log('💊 Cleared all treatments from database');
+      } catch (error) {
+        console.error('❌ Failed to clear treatments:', error);
+        throw error;
+      }
+
+      // Verify database is actually empty
+      console.log('🔍 STEP 4: Verifying database is empty...');
+      try {
+        const afterClearReadings = await database.getGlucoseReadings(
+          currentPatient.id,
+          new Date(Date.now() - 48 * 60 * 60 * 1000), // 48h ago
+          new Date(Date.now() + 24 * 60 * 60 * 1000)   // 24h future
+        );
+        console.log(`🔍 After clearing: ${afterClearReadings.length} readings remain (should be 0)`);
+        if (afterClearReadings.length > 0) {
+          console.log(`⚠️ WARNING: ${afterClearReadings.length} readings were not cleared!`);
+          console.log('First remaining:', afterClearReadings[0]);
+        }
+      } catch (error) {
+        console.error('❌ Failed to verify database clearing:', error);
+        throw error;
+      }
+
+      // Reset ALL state to clean slate
+      console.log('🔍 STEP 5: Resetting state...');
+      try {
+        set({
+          glucoseReadings: [],
+          recentTreatments: [],
+          simulationState: {
+            isComputing: false,
+            lastComputedAt: new Date(),
+            nextComputationTime: new Date(),
+            computedUntil: new Date(),
+          },
+          nextReadingTime: null,
+          cgmTimer: null,
+          error: null,
+        });
+        console.log('✅ State reset complete');
+      } catch (error) {
+        console.error('❌ Failed to reset state:', error);
+        throw error;
+      }
+
+      // Generate realistic glucose data for the past 24 hours (288 readings)
+      console.log('🔍 STEP 6: Generating new historical data for past 24 hours...');
+      const resetReadings: GlucoseReading[] = [];
+      const now = new Date();
+      const alignedNow = alignToFiveMinutes(now);
+
+      // Start with a baseline glucose level
+      let currentGlucose = 120 + (Math.random() - 0.5) * 40; // Random start between 100-140
+
+      const hoursOfHistory = 24; // Generate 24 hours of history
+      const totalReadings = (hoursOfHistory * 60) / 5; // 5-minute intervals
+      console.log(`📊 Generating ${totalReadings} historical readings over ${hoursOfHistory} hours`);
+
+      for (let i = totalReadings - 1; i >= 0; i--) { // Work backwards from now
+        const timestamp = new Date(alignedNow.getTime() - (i * 5 * 60 * 1000));
+
+        // Add realistic glucose variation
+        const variation = (Math.random() - 0.5) * 20; // ±10 mg/dL variation
+        currentGlucose = Math.max(80, Math.min(180, currentGlucose + variation));
+
+        resetReadings.push({
+          id: `reset_${timestamp.getTime()}`,
+          timestamp,
+          value: Math.round(currentGlucose * 10) / 10, // Round to 1 decimal
+          iob: Math.max(0, Math.random() * 2), // Random IOB 0-2u
+          cob: Math.max(0, Math.random() * 30), // Random COB 0-30g
+          isFuture: false,
+          patientId: currentPatient.id,
+        });
+      }
+
+      // Insert the reset readings into the database
+      for (const reading of resetReadings) {
+        await database.insertGlucoseReading(reading);
+      }
+
+      console.log(`✅ Generated and inserted ${resetReadings.length} historical readings over past ${hoursOfHistory} hours`);
+
+      // Verify what's actually in the database after inserting our readings
+      console.log('🔍 STEP 6.5: Checking database contents after inserting historical data...');
+      const afterInsertReadings = await database.getGlucoseReadings(
+        currentPatient.id,
+        new Date(Date.now() - 48 * 60 * 60 * 1000), // 48h ago
+        new Date(Date.now() + 24 * 60 * 60 * 1000)   // 24h future
+      );
+      console.log(`📊 After inserting historical: ${afterInsertReadings.length} total readings in database`);
+      if (afterInsertReadings.length !== resetReadings.length) {
+        console.log(`⚠️ WARNING: Expected ${resetReadings.length} readings but found ${afterInsertReadings.length}`);
+        console.log(`⚠️ Extra readings: ${afterInsertReadings.length - resetReadings.length}`);
+      }
+
+      // Generate future predictions using glucose simulator
+      const currentGlucoseValue = resetReadings[resetReadings.length - 1].value;
+      const latestIOB = resetReadings[resetReadings.length - 1].iob;
+      const latestCOB = resetReadings[resetReadings.length - 1].cob;
+
+      console.log('🔍 STEP 7: Updating patient currentGlucose before simulation...');
+      // Update patient currentGlucose BEFORE running simulation
+      await get().updatePatient({ currentGlucose: currentGlucoseValue });
+      console.log(`✅ Updated patient currentGlucose to ${currentGlucoseValue} mg/dL`);
+
+      // Run simulation to generate future predictions
+      console.log('🔍 STEP 8: Starting simulation with updated glucose...');
+      await get().startSimulation();
+
+      // Update current glucose to match the latest reading
+      set({
+        simulationState: {
+          isComputing: false,
+          lastComputedAt: new Date(),
+          nextComputationTime: new Date(alignedNow.getTime() + (5 * 60 * 1000)), // Next computation in 5 min
+          computedUntil: new Date(alignedNow.getTime() + (2 * 60 * 60 * 1000)), // 2h future
+        }
+      });
+
+      // Reload the glucose data to include both historical and future
+      await get().loadGlucoseData(24, 2);
+
+      // Check what we have after reload
+      const { glucoseReadings: finalReadings } = get();
+      console.log(`📈 After reload: ${finalReadings.length} readings in store`);
+      console.log(`📈 Latest reading: ${finalReadings[finalReadings.length - 1]?.value || 'none'} mg/dL`);
+
+      // Start fresh CGM timer with the new data
+      await get().startCGMTimer();
+
+      console.log('🎉 Simulation reset complete - fresh 24h history + 12h predictions generated');
+    } catch (error) {
+      console.error('Failed to reset simulation:', error);
+      set({ error: 'Failed to reset simulation' });
+    }
   },
 }));

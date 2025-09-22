@@ -36,6 +36,7 @@ export default function GlucoseScreen() {
     startSimulation,
     startCGMTimer,
     clearError,
+    resetSimulationWithStableData,
   } = useSimulationStore();
 
   useEffect(() => {
@@ -213,8 +214,9 @@ export default function GlucoseScreen() {
     );
   }
 
-  const currentGlucose = currentPatient.currentGlucose;
-  const latestReading = glucoseReadings.find(r => !r.isFuture);
+  // Get the most recent non-future reading (current CGM value)
+  const latestReading = glucoseReadings.filter(r => !r.isFuture).sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime())[0];
+  const currentGlucose = latestReading?.value || currentPatient.currentGlucose;
   const iob = latestReading?.iob || 0;
   const cob = latestReading?.cob || 0;
 
@@ -233,10 +235,11 @@ export default function GlucoseScreen() {
       >
         <GlucoseChart
           readings={glucoseReadings}
-          targetRange={currentPatient.targetGlucose}
+          targetRange={{ low: 70, high: 180 }}
           currentGlucose={currentGlucose}
           iob={iob}
           cob={cob}
+          onResetSimulation={resetSimulationWithStableData}
         />
 
         <QuickTreatment
